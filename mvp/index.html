@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>哼唱转 MIDI · MVP</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    background: #101218; color: #e8eaf0; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 560px; background: #171a23; border: 1px solid #252a38;
+    border-radius: 20px; padding: 32px 28px; box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  }
+  h1 { font-size: 20px; margin: 0 0 6px; letter-spacing: .5px; }
+  .sub { color: #8b93a7; font-size: 13px; margin-bottom: 26px; }
+  .rec-row { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+  .rec-btn {
+    width: 92px; height: 92px; border-radius: 50%; border: none; cursor: pointer;
+    background: #e04a4a; color: #fff; font-size: 15px; font-weight: 600;
+    transition: transform .12s, background .2s; flex: 0 0 auto;
+    box-shadow: 0 8px 24px rgba(224,74,74,.35);
+  }
+  .rec-btn:hover { transform: scale(1.04); }
+  .rec-btn.on { background: #2b2f3d; box-shadow: inset 0 0 0 2px #e04a4a; color: #ff8f8f; }
+  .meter-wrap { flex: 1; }
+  .meter { height: 10px; border-radius: 6px; background: #232837; overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0%; background: linear-gradient(90deg,#3ecf8e,#e0c14a,#e04a4a); transition: width .08s; }
+  .timer { font-variant-numeric: tabular-nums; color: #8b93a7; font-size: 13px; margin-top: 8px; }
+  .timer b { color: #e8eaf0; font-size: 16px; }
+  .label { font-size: 12px; color: #8b93a7; margin: 20px 0 8px; letter-spacing: .3px; }
+  .instr { display: flex; gap: 10px; }
+  .instr button {
+    flex: 1; padding: 12px 0; border-radius: 12px; cursor: pointer; font-size: 14px;
+    background: #1f2430; color: #aab2c5; border: 1px solid #2b3142; transition: all .15s;
+  }
+  .instr button.sel { background: #2e3a5c; color: #fff; border-color: #4a5f9e; }
+  .bpm-row { display: flex; align-items: center; gap: 12px; }
+  .bpm-row input {
+    width: 96px; padding: 10px 12px; border-radius: 10px; border: 1px solid #2b3142;
+    background: #1f2430; color: #e8eaf0; font-size: 15px; text-align: center;
+  }
+  .bpm-row span { color: #8b93a7; font-size: 13px; }
+  .go {
+    width: 100%; margin-top: 26px; padding: 16px; border: none; border-radius: 14px;
+    background: #4a6cf7; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+    transition: background .2s;
+  }
+  .go:disabled { background: #2b3142; color: #6d7488; cursor: not-allowed; }
+  .go:hover:not(:disabled) { background: #5b7bfa; }
+  .result { margin-top: 22px; display: none; border-top: 1px dashed #2b3142; padding-top: 20px; }
+  .result.show { display: block; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: #8b93a7; margin-bottom: 14px; }
+  .stats b { color: #e8eaf0; font-size: 17px; display: block; margin-top: 2px; }
+  .actions { display: flex; gap: 10px; }
+  .actions a, .actions button {
+    flex: 1; text-align: center; padding: 13px 0; border-radius: 12px; font-size: 14px;
+    text-decoration: none; cursor: pointer; border: 1px solid #2b3142; background: #1f2430; color: #cfd5e4;
+  }
+  .actions a.primary { background: #3ecf8e; border-color: #3ecf8e; color: #082015; font-weight: 600; }
+  .hint { margin-top: 14px; font-size: 12px; color: #6d7488; line-height: 1.7; }
+  .err { margin-top: 14px; color: #ff8f8f; font-size: 13px; display: none; }
+  .err.show { display: block; }
+  audio { width: 100%; margin-top: 14px; display: none; }
+  audio.show { display: block; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>哼唱转 MIDI</h1>
+  <div class="sub">按一下录，唱一段，拿 .mid 拖进库乐队</div>
+
+  <div class="rec-row">
+    <button id="recBtn" class="rec-btn">录音</button>
+    <div class="meter-wrap">
+      <div class="meter"><i id="meter"></i></div>
+      <div class="timer">已录 <b id="time">0.0</b> 秒</div>
+    </div>
+  </div>
+
+  <div class="label">目标乐器</div>
+  <div class="instr">
+    <button data-ins="piano" class="sel">钢琴</button>
+    <button data-ins="guitar">吉他</button>
+    <button data-ins="drum">鼓</button>
+  </div>
+
+  <div class="label">速度 BPM（先按你哼的快慢填一个）</div>
+  <div class="bpm-row">
+    <input id="bpm" type="number" value="90" min="40" max="240">
+    <span>拍 / 分钟</span>
+  </div>
+
+  <button id="goBtn" class="go" disabled>转成 MIDI</button>
+
+  <div id="err" class="err"></div>
+
+  <div id="result" class="result">
+    <div class="stats">
+      <div>音符数<b id="rNotes">-</b></div>
+      <div>时长<b id="rDur">-</b></div>
+      <div>处理耗时<b id="rTime">-</b></div>
+    </div>
+    <audio id="player" controls></audio>
+    <div class="actions">
+      <a id="dlBtn" class="primary" href="#">下载 .mid</a>
+      <button id="revealBtn">在 Finder 显示</button>
+    </div>
+    <div class="hint">
+      拖进库乐队后换成你想要的音色。<br>
+      鼓：嘴巴打节奏，低频当底鼓、中频当军鼓、高频当踩镲。
+    </div>
+  </div>
+</div>
+
+<script>
+let ctx = null, stream = null, source = null, proc = null;
+let chunks = [], recording = false, startedAt = 0, timerId = null;
+let lastBlob = null, lastPath = null, instrument = 'piano';
+
+const recBtn = document.getElementById('recBtn');
+const goBtn = document.getElementById('goBtn');
+const meter = document.getElementById('meter');
+const timeEl = document.getElementById('time');
+const errEl = document.getElementById('err');
+const resultEl = document.getElementById('result');
+
+document.querySelectorAll('.instr button').forEach(b => {
+  b.onclick = () => {
+    document.querySelectorAll('.instr button').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    instrument = b.dataset.ins;
+  };
+});
+
+function encodeWAV(samples, sampleRate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sampleRate, true); v.setUint32(28, sampleRate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  ws(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++) {
+    let s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([v], { type: 'audio/wav' });
+}
+
+async function startRec() {
+  errEl.classList.remove('show');
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  source = ctx.createMediaStreamSource(stream);
+  proc = ctx.createScriptProcessor(4096, 1, 1);
+  chunks = [];
+  proc.onaudioprocess = e => {
+    if (!recording) return;
+    const d = e.inputBuffer.getChannelData(0);
+    chunks.push(new Float32Array(d));
+    let sum = 0;
+    for (let i = 0; i < d.length; i++) sum += d[i] * d[i];
+    const rms = Math.sqrt(sum / d.length);
+    meter.style.width = Math.min(100, rms * 900) + '%';
+  };
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  source.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
+  recording = true;
+  startedAt = performance.now();
+  recBtn.textContent = '停止';
+  recBtn.classList.add('on');
+  if (timerId) clearInterval(timerId);
+  timerId = setInterval(() => {
+    timeEl.textContent = ((performance.now() - startedAt) / 1000).toFixed(1);
+  }, 100);
+}
+
+function stopRec() {
+  recording = false;
+  recBtn.textContent = '录音';
+  recBtn.classList.remove('on');
+  clearInterval(timerId);
+  meter.style.width = '0%';
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (source) source.disconnect();
+  if (proc) proc.disconnect();
+  if (ctx) ctx.close();
+  const total = chunks.reduce((a, c) => a + c.length, 0);
+  const all = new Float32Array(total);
+  let off = 0;
+  for (const c of chunks) { all.set(c, off); off += c.length; }
+  const rate = ctx ? ctx.sampleRate : 44100;
+  lastBlob = encodeWAV(all, rate);
+  const player = document.getElementById('player');
+  player.src = URL.createObjectURL(lastBlob);
+  player.classList.add('show');
+  goBtn.disabled = false;
+}
+
+recBtn.onclick = async () => {
+  try {
+    if (!recording) await startRec();
+    else stopRec();
+  } catch (e) {
+    errEl.textContent = '麦克风打不开：' + e.message;
+    errEl.classList.add('show');
+  }
+};
+
+goBtn.onclick = async () => {
+  if (!lastBlob) return;
+  goBtn.disabled = true;
+  goBtn.textContent = '处理中…';
+  errEl.classList.remove('show');
+  try {
+    const fd = new FormData();
+    fd.append('audio', lastBlob, 'hum.wav');
+    fd.append('instrument', instrument);
+    fd.append('bpm', document.getElementById('bpm').value || '90');
+    const r = await fetch('/api/convert', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    document.getElementById('rNotes').textContent = j.note_count;
+    document.getElementById('rDur').textContent = j.duration + 's';
+    document.getElementById('rTime').textContent = j.elapsed + 's';
+    const dl = document.getElementById('dlBtn');
+    dl.href = '/api/download/' + encodeURIComponent(j.filename);
+    dl.download = j.filename;
+    lastPath = j.midi_path;
+    resultEl.classList.add('show');
+    if (j.note_count === 0) {
+      errEl.textContent = '这段没识别出音符，可能是音量太小或时间太短，再录一次试试。';
+      errEl.classList.add('show');
+    }
+  } catch (e) {
+    errEl.textContent = '处理失败：' + e.message;
+    errEl.classList.add('show');
+  } finally {
+    goBtn.disabled = false;
+    goBtn.textContent = '转成 MIDI';
+  }
+};
+
+document.getElementById('revealBtn').onclick = () => {
+  if (!lastPath) return;
+  fetch('/api/reveal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: lastPath })
+  });
+};
+</script>
+</body>
+</html>
